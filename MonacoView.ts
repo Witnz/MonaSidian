@@ -8,14 +8,6 @@ import { ValidationManager } from "./ValidationManager";
 
 export const VIEW_TYPE_MONACO_PRETTIER = "monaco-prettier-editor";
 
-// Configure Monaco environment to disable web workers
-// This prevents "Unexpected usage" errors in Obsidian's bundled environment
-(self as any).MonacoEnvironment = {
-	getWorker() {
-		return new Worker('', { type: 'module' });
-	}
-};
-
 export class MonacoPrettierView extends TextFileView {
 	plugin: MonacoPrettierPlugin;
 	editor: monaco.editor.IStandaloneCodeEditor | null = null;
@@ -60,22 +52,14 @@ export class MonacoPrettierView extends TextFileView {
 	}
 
 	async onLoadFile(file: TFile): Promise<void> {
-		console.log('Monaco Prettier: onLoadFile START');
 		this.isLoadingFile = true;
 		
 		// Wait for container to be ready
 		await new Promise(resolve => setTimeout(resolve, 10));
 		
-		console.log('Monaco Prettier: contentEl dimensions:', this.contentEl.clientWidth, 'x', this.contentEl.clientHeight);
-		
 		// If dimensions are 0, wait a bit more
 		if (this.contentEl.clientWidth === 0 || this.contentEl.clientHeight === 0) {
-			console.log('Monaco Prettier: Container not ready, waiting...');
 			await new Promise(resolve => setTimeout(resolve, 100));
-			console.log('Monaco Prettier: After wait, dimensions:', {
-				clientWidth: this.contentEl.clientWidth,
-				clientHeight: this.contentEl.clientHeight
-			});
 		}
 		
 		// Create Monaco editor settings
@@ -92,8 +76,6 @@ export class MonacoPrettierView extends TextFileView {
 		
 		// Configure TypeScript/JavaScript validation settings
 		this.configureLanguageDefaults();
-		
-		console.log('Monaco Prettier: Creating editor...');
 		
 		// Create Monaco editor directly in contentEl (like vscode-editor)
 		this.editor = monaco.editor.create(this.contentEl, {
@@ -125,24 +107,6 @@ export class MonacoPrettierView extends TextFileView {
 			suggestOnTriggerCharacters: true,
 		});
 		
-		console.log('Monaco Prettier: Editor created');
-		
-		// Debug: Check Monaco's actual DOM
-		const monacoContainer = this.contentEl.querySelector('.monaco-editor');
-		if (monacoContainer) {
-			const computed = window.getComputedStyle(monacoContainer as HTMLElement);
-			console.log('Monaco Prettier: Monaco container found!', {
-				width: computed.width,
-				height: computed.height,
-				display: computed.display,
-				position: computed.position,
-				visibility: computed.visibility,
-				overflow: computed.overflow
-			});
-		} else {
-			console.log('Monaco Prettier: ERROR - No .monaco-editor div found!');
-		}
-
 		// Listen to content changes
 		this.editor.onDidChangeModelContent(async () => {
 			// Don't save during initial file load
@@ -154,35 +118,32 @@ export class MonacoPrettierView extends TextFileView {
 			this.runValidation();
 		});
 		
+		// Hook up format-on-type if enabled
+		if (settings.formatOnType) {
+			this.setupFormatOnType();
+		}
+		
 		// Add keyboard handlers like vscode-editor
 		this.addKeyboardEventHandlers();
 		
-		console.log('Monaco Prettier: Calling super.onLoadFile');
-		
 		// Call super which will load file and call setViewData
 		await super.onLoadFile(file);
-		
-		console.log('Monaco Prettier: super.onLoadFile complete, forcing layout');
 		
 		// File is now loaded, allow saves from content changes
 		this.isLoadingFile = false;
 		
 		// Force multiple layout passes to ensure proper sizing
 		if (this.editor) {
-			// Get actual dimensions
 			const width = this.contentEl.clientWidth;
 			const height = this.contentEl.clientHeight;
-			console.log('Monaco Prettier: Forcing layout with dimensions:', width, 'x', height);
 			
 			// Force explicit layout
 			this.editor.layout({ width, height });
 			
-			// Also use automaticLayout's internal trigger
 			setTimeout(() => {
 				if (this.editor) {
 					this.editor.layout();
 					this.editor.focus();
-					console.log('Monaco Prettier: Final layout applied');
 				}
 			}, 50);
 		}
@@ -190,12 +151,6 @@ export class MonacoPrettierView extends TextFileView {
 	
 	// TextFileView calls this to set the file content
 	setViewData(data: string, clear: boolean): void {
-		console.log('MonacoView.setViewData called:', {
-			dataLength: data.length,
-			clear,
-			fileName: this.file?.name,
-			firstChars: data.substring(0, 50)
-		});
 		if (this.editor) {
 			if (clear) {
 				this.editor.getModel()?.setValue(data || '');
@@ -210,29 +165,13 @@ export class MonacoPrettierView extends TextFileView {
 	
 	// TextFileView calls this to get the current content
 	getViewData(): string {
-		console.log('MonacoView.getViewData called:', {
-			hasEditor: !!this.editor,
-			hasModel: !!this.editor?.getModel(),
-			editorDisposed: this.editor ? (this.editor as any)._disposed : 'no editor',
-			fileName: this.file?.name
-		});
-		
 		// Simply return current editor value - no caching needed
 		if (this.editor?.getModel()) {
-			const content = this.editor.getValue();
-			console.log('MonacoView.getViewData: Returning editor content:', {
-				length: content.length,
-				firstChars: content.substring(0, 50)
-			});
-			return content;
+			return this.editor.getValue();
 		}
 		
 		// This should never happen if lifecycle is correct
-		console.error('MonacoView.getViewData: Editor or model missing!', {
-			editorExists: !!this.editor,
-			modelExists: !!this.editor?.getModel(),
-			stackTrace: new Error().stack
-		});
+		console.error('MonacoView.getViewData: Editor or model not available');
 		return '';
 	}
 	
@@ -259,13 +198,6 @@ export class MonacoPrettierView extends TextFileView {
 
 	private configureLanguageDefaults(): void {
 		const settings = this.plugin.settings;
-		
-		console.log('Configuring Monaco language defaults:', {
-			semanticValidation: settings.semanticValidation,
-			syntaxValidation: settings.syntaxValidation,
-			noSemanticValidation: !settings.semanticValidation,
-			noSyntaxValidation: !settings.syntaxValidation
-		});
 		
 		// Configure JavaScript language defaults
 		monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
@@ -365,6 +297,17 @@ export class MonacoPrettierView extends TextFileView {
 			}
 		}
 
+		// Ctrl+S: format (if enabled) then save
+		if (event.ctrlKey && event.key === 's') {
+			event.preventDefault();
+			event.stopPropagation();
+			if (this.plugin.settings.formatOnSave) {
+				this.formatDocument().then(() => this.requestSave());
+			} else {
+				this.requestSave();
+			}
+		}
+
 		// Alt+Z to toggle word wrap
 		if (event.altKey && event.key === 'z') {
 			event.preventDefault();
@@ -461,8 +404,6 @@ export class MonacoPrettierView extends TextFileView {
 	}
 
 	async onUnloadFile(file: TFile): Promise<void> {
-		console.log('MonacoView.onUnloadFile: Starting cleanup for:', file.name);
-		
 		// Mark as loading to prevent any spurious saves during cleanup
 		this.isLoadingFile = true;
 		
@@ -479,8 +420,6 @@ export class MonacoPrettierView extends TextFileView {
 		// super.onUnloadFile() will call getViewData() to save the file
 		// The editor must still exist at that point
 		await super.onUnloadFile(file);
-		
-		console.log('MonacoView.onUnloadFile: super.onUnloadFile() complete, now disposing editor');
 		
 		// NOW it's safe to dispose the editor after the save
 		if (this.editor) {
