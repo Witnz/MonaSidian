@@ -187,7 +187,7 @@ export class ValidationManager {
 				errors.push({
 					line: lineNum,
 					column: 1,
-					message: "Mixed tabs and spaces in indentation",
+					message: "Mixed tabs and spaces in indentation (Python requires consistent indentation)",
 					severity: "warning"
 				});
 			}
