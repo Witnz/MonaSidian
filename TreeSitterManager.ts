@@ -4,7 +4,7 @@ import type { TreeSitterLanguageParser } from "./settings";
 /**
  * Store for inline error decorations per editor
  */
-const treeSitterInlineDecorations = new WeakMap<monaco.editor.IStandaloneCodeEditor, string[]>();
+const treeSitterInlineDecorations = new WeakMap<monaco.editor.IStandaloneCodeEditor, monaco.editor.IContentWidget[]>();
 
 // Type definitions for tree-sitter
 type TreeSitterParser = any;
@@ -68,41 +68,27 @@ export class TreeSitterManager {
 	 */
 	static async initialize(): Promise<void> {
 		if (this.initialized) {
-			console.log('Tree-sitter already initialized');
 			return;
 		}
 		
-		console.log('🔧 Starting tree-sitter initialization...');
-		
 		try {
-			// Dynamically import tree-sitter - use named import for Parser and Language
-			console.log('Importing web-tree-sitter Parser and Language...');
 			const module: any = await import('web-tree-sitter');
-			console.log('Module imported, available exports:', Object.keys(module).join(', '));
 			
 			// Get the Parser and Language classes from named exports
 			this.Parser = module.Parser;
 			this.Language = module.Language;
-			console.log('Parser class obtained:', typeof this.Parser);
-			console.log('Language class obtained:', typeof this.Language);
-			console.log('Parser.init type:', typeof this.Parser?.init);
 			
 			// In Obsidian plugin context, load WASM from plugin directory
 			const pluginDir = (window as any).app?.vault?.adapter?.basePath;
-			console.log('Plugin base path:', pluginDir);
 			
 			// Load WASM file using Obsidian's adapter
 			let wasmBuffer: ArrayBuffer;
 			if (pluginDir) {
 				const adapter = (window as any).app?.vault?.adapter;
-				// Use relative path from vault root
 				const wasmPath = `.obsidian/plugins/monaco-prettier-editor/wasm/tree-sitter.wasm`;
-				console.log('Loading WASM from vault:', wasmPath);
 				
 				try {
-					// Read as binary using vault-relative path
 					const wasmData = await adapter.readBinary(wasmPath);
-					console.log('WASM data type:', typeof wasmData, 'constructor:', wasmData?.constructor?.name);
 					
 					// readBinary returns ArrayBuffer directly
 					if (wasmData instanceof ArrayBuffer) {
@@ -112,10 +98,7 @@ export class TreeSitterManager {
 					} else {
 						throw new Error('Unexpected WASM data format');
 					}
-					
-					console.log('✅ WASM file loaded successfully, size:', wasmBuffer.byteLength, 'bytes');
 				} catch (error) {
-					console.error('Failed to read WASM file:', error);
 					throw new Error(`Could not load tree-sitter WASM file: ${(error as any).message}`);
 				}
 			} else {
@@ -129,12 +112,8 @@ export class TreeSitterManager {
 			});
 			
 			this.initialized = true;
-			console.log('✅ Tree-sitter initialized successfully!');
 		} catch (error) {
-			console.error('❌ Failed to initialize tree-sitter:', error);
-			console.error('Error name:', (error as any)?.name);
-			console.error('Error message:', (error as any)?.message);
-			console.error('Error stack:', (error as any)?.stack);
+			console.error('Failed to initialize tree-sitter:', error);
 			throw error;
 		}
 	}
@@ -145,27 +124,21 @@ export class TreeSitterManager {
 	private static async getParser(language: string): Promise<TreeSitterParser | null> {
 		const treeSitterLang = this.languageMap[language];
 		if (!treeSitterLang) {
-			console.log(`No tree-sitter language mapping for: ${language}`);
 			return null;
 		}
 
 		// Check if parser is installed in settings
 		if (this.settings && this.settings[treeSitterLang] && !this.settings[treeSitterLang].installed) {
-			console.log(`Parser for ${treeSitterLang} is not installed. Please download it from settings.`);
 			return null;
 		}
 		
 		// Return cached parser if available
 		if (this.parsers.has(treeSitterLang)) {
-			console.log(`Using cached parser for ${treeSitterLang}`);
 			return this.parsers.get(treeSitterLang)!;
 		}
 		
-		console.log(`🔄 Loading parser for ${treeSitterLang}...`);
-		
 		try {
 			const parser = new this.Parser();
-			console.log('Parser instance created');
 			
 			// Get vault adapter for file access
 			const adapter = (window as any).app?.vault?.adapter;
@@ -175,7 +148,6 @@ export class TreeSitterManager {
 
 			// Construct local WASM file path
 			const localPath = `.obsidian/plugins/monaco-prettier-editor/wasm/tree-sitter-${treeSitterLang}.wasm`;
-			console.log(`Loading language WASM from: ${localPath}`);
 			
 			// Read WASM file from vault
 			const wasmData = await adapter.readBinary(localPath);
@@ -189,27 +161,16 @@ export class TreeSitterManager {
 				throw new Error('WASM data is not an ArrayBuffer');
 			}
 			
-			console.log(`✅ Language WASM loaded for ${treeSitterLang}, size: ${wasmBuffer.byteLength} bytes`);
-			
-			// Load the language using Language.load() (Language is separate export)
+			// Load the language using Language.load()
 			const Lang = await this.Language.load(new Uint8Array(wasmBuffer));
-			console.log(`Language grammar loaded for ${treeSitterLang}`);
 			
 			parser.setLanguage(Lang);
 			this.parsers.set(treeSitterLang, parser);
 			
-			console.log(`✅ Tree-sitter parser ready for ${treeSitterLang}`);
 			return parser;
 			
 		} catch (error) {
-			console.error(`❌ Failed to load tree-sitter parser for ${treeSitterLang}:`, error);
-			console.error('Error details:', (error as any)?.message || error);
-			
-			// Provide helpful message
-			if ((error as any)?.message?.includes('ENOENT') || (error as any)?.message?.includes('not found')) {
-				console.error(`💡 Hint: Please download the ${treeSitterLang} parser from plugin settings`);
-			}
-			
+			console.error(`Failed to load tree-sitter parser for ${treeSitterLang}:`, error);
 			return null;
 		}
 	}
@@ -218,40 +179,25 @@ export class TreeSitterManager {
 	 * Parse code and detect syntax errors
 	 */
 	static async parse(language: string, code: string): Promise<TreeSitterError[]> {
-		console.log(`🔍 Tree-sitter parse called for ${language}, code length: ${code.length}`);
 		const errors: TreeSitterError[] = [];
 		
 		if (!this.initialized) {
-			console.log('Tree-sitter not initialized, initializing now...');
 			await this.initialize();
 		}
 		
 		const parser = await this.getParser(language);
 		if (!parser) {
-			// Language not supported by tree-sitter
-			console.log(`Parser not available for ${language}`);
 			return errors;
 		}
-		
-		console.log(`Parsing code with tree-sitter for ${language}...`);
-		console.log(`Parser object type: ${typeof parser}, has parse method: ${typeof parser.parse}`);
 		
 		try {
 			const tree = parser.parse(code);
 			const rootNode = tree.rootNode;
 			
-			// hasError is a property, not a method
-			console.log(`Parse completed. Root node type: ${rootNode.type}, has errors: ${rootNode.hasError}`);
-			
 			// Find ERROR and MISSING nodes in the syntax tree
 			this.findErrors(rootNode, errors, code);
-			
-			console.log(`Found ${errors.length} errors in syntax tree`);
-			
 		} catch (error) {
 			console.error('Tree-sitter parsing error:', error);
-			console.error('Error message:', (error as any)?.message);
-			console.error('Error stack:', (error as any)?.stack);
 		}
 		
 		return errors;
@@ -345,36 +291,28 @@ export class TreeSitterManager {
 			source: 'Tree-sitter'
 		}));
 		
-		console.log('Tree-sitter setting', markers.length, 'markers for', language);
-		
 		monaco.editor.setModelMarkers(model, 'tree-sitter', markers);
 		
-		// Add inline error messages using content widgets (since `after` property isn't supported in Monaco 0.45.0)
-		// First, clear previous content widgets
+		// Clear previous content widgets
 		const oldWidgets = treeSitterInlineDecorations.get(editor) || [];
-		oldWidgets.forEach(widgetId => {
-			const widget = (editor as any)._contentWidgets?.[widgetId];
-			if (widget) {
-				editor.removeContentWidget(widget);
-			}
-		});
+		oldWidgets.forEach(widget => editor.removeContentWidget(widget));
 		
 		// Create new content widgets for each error
-		const widgetIds: string[] = [];
+		const widgets: monaco.editor.IContentWidget[] = [];
 		errors.forEach((error, index) => {
 			const lineContent = model.getLineContent(error.line);
 			const isError = error.severity === "error";
 			const widgetId = `tree-sitter-inline-${index}-${Date.now()}`;
 			
-			const widget = {
+			const widget: monaco.editor.IContentWidget = {
 				getId: () => widgetId,
 				getDomNode: () => {
 					const node = document.createElement('span');
 					node.className = isError ? 'monaco-inline-error' : 'monaco-inline-warning';
 					node.textContent = ` ⚠️ ${error.message}`;
 					node.style.opacity = '0.7';
-				node.style.fontSize = inlineFontSize ? `${inlineFontSize}px` : '12px';
-				node.style.fontFamily = inlineFont || "'Cascadia Code', 'Fira Code', Consolas, monospace";
+					node.style.fontSize = inlineFontSize ? `${inlineFontSize}px` : '12px';
+					node.style.fontFamily = inlineFont || "'Cascadia Code', 'Fira Code', Consolas, monospace";
 					node.style.fontStyle = 'italic';
 					node.style.paddingLeft = '0.75em';
 					node.style.whiteSpace = 'nowrap';
@@ -393,14 +331,10 @@ export class TreeSitterManager {
 			};
 			
 			editor.addContentWidget(widget);
-			widgetIds.push(widgetId);
+			widgets.push(widget);
 		});
 		
-		treeSitterInlineDecorations.set(editor, widgetIds);
-		
-		console.log(`[Tree-sitter] Created ${widgetIds.length} inline content widgets`);
-		
-		console.log('Tree-sitter validation completed for', language);
+		treeSitterInlineDecorations.set(editor, widgets);
 	}
 	
 	/**
