@@ -6,11 +6,13 @@ import { CreateCodeFileModal } from "./CreateCodeFileModal";
 import { FenceEditModal } from "./FenceEditModal";
 import { ThemeManager } from "./ThemeManager";
 import { LinkPreviewManager } from "./LinkPreviewManager";
+import { CodeblockRenderer } from "./CodeblockRenderer";
 
 export default class MonacoPrettierPlugin extends Plugin {
 	settings: MonacoPrettierSettings;
 	themeManager: ThemeManager;
 	linkPreviewManager: LinkPreviewManager | null = null;
+	codeblockRenderer: CodeblockRenderer;
 	private logBuffer: string[] = [];
 	private originalConsole = {
 		log: console.log,
@@ -42,6 +44,13 @@ export default class MonacoPrettierPlugin extends Plugin {
 		if (this.settings.linkPreviews) {
 			this.linkPreviewManager.start();
 		}
+
+		// Initialize codeblock renderer (Highlight.js)
+		this.codeblockRenderer = new CodeblockRenderer(this.app, this);
+		await this.codeblockRenderer.initialize();
+		this.registerMarkdownPostProcessor(
+			(el, ctx) => this.codeblockRenderer.processCodeblock(el, ctx)
+		);
 
 		// Register the Monaco Prettier view
 		this.registerView(
@@ -236,6 +245,9 @@ export default class MonacoPrettierPlugin extends Plugin {
 			this.linkPreviewManager.stop();
 			this.linkPreviewManager = null;
 		}
+
+		// Clean up codeblock renderer
+		this.codeblockRenderer.cleanup();
 		console.log("Monaco Prettier Plugin unloaded");
 	}
 }

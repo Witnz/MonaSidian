@@ -33,6 +33,14 @@ export interface MonacoPrettierSettings {
 	autoDetectLanguage: boolean;
 	enableConsoleLogging: boolean;
 	
+	// Pretty codeblock settings (Highlight.js)
+	enablePrettyCodeblocks: boolean;
+	codeblockTheme: string;
+	enabledLanguageGroups: Record<string, boolean>;
+	languageAliases: Record<string, string>;
+	codeblockShowHeader: boolean;
+	codeblockAllowThemeBackground: boolean;
+	
 	// Prettier settings
 	formatOnSave: boolean;
 	formatOnType: boolean;
@@ -172,6 +180,36 @@ export const DEFAULT_SETTINGS: MonacoPrettierSettings = {
 	linkPreviews: true,
 	autoDetectLanguage: true,
 	enableConsoleLogging: false,
+	
+	enablePrettyCodeblocks: false,
+	codeblockTheme: "github-dark",
+	enabledLanguageGroups: {
+		Assembler: false,
+		"Build-system": false,
+		Common: true,
+		Config: true,
+		Css: false,
+		Database: false,
+		Enterprise: false,
+		Functional: false,
+		Gaming: false,
+		Graphics: false,
+		Hardware: false,
+		Lisp: false,
+		Logs: false,
+		Markup: false,
+		Miscellaneous: false,
+		Protocols: false,
+		Scientific: false,
+		Scripting: false,
+		Syntax: false,
+		System: false,
+		Template: false,
+		Web: true,
+	},
+	languageAliases: {},
+	codeblockShowHeader: false,
+	codeblockAllowThemeBackground: false,
 	
 	formatOnSave: true,
 	formatOnType: false,
