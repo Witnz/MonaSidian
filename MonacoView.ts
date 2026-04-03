@@ -297,8 +297,8 @@ export class MonacoPrettierView extends TextFileView {
 			}
 		}
 
-		// Ctrl+S: format (if enabled) then save
-		if (event.ctrlKey && event.key === 's') {
+		// Ctrl+S / Cmd+S: format (if enabled) then save
+		if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
 			event.preventDefault();
 			event.stopPropagation();
 			if (this.plugin.settings.formatOnSave) {

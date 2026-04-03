@@ -9,8 +9,9 @@ const inlineErrorDecorations = new WeakMap<monaco.editor.IStandaloneCodeEditor, 
 
 /**
  * Store for marker change listener disposables per model, to avoid leaks.
+ * Stores both the global marker listener and the model's onWillDispose subscription.
  */
-const markerListeners = new WeakMap<monaco.editor.ITextModel, monaco.IDisposable>();
+const markerListeners = new WeakMap<monaco.editor.ITextModel, { marker: monaco.IDisposable; dispose: monaco.IDisposable }>();
 
 /**
  * Lightweight syntax validation for non-TypeScript/JavaScript languages
@@ -287,13 +288,14 @@ export class ValidationManager {
 		// Get all markers for this model
 		const markers = monaco.editor.getModelMarkers({ resource: model.uri });
 		
+		// Always clear previously-added widgets first so they're removed when errors are fixed
+		const oldWidgets = inlineErrorDecorations.get(editor) || [];
+		oldWidgets.forEach(widget => editor.removeContentWidget(widget));
+		inlineErrorDecorations.set(editor, []);
+
 		if (markers.length === 0) {
 			return;
 		}
-
-		// Clear previous content widgets
-		const oldWidgets = inlineErrorDecorations.get(editor) || [];
-		oldWidgets.forEach(widget => editor.removeContentWidget(widget));
 
 		// Create new content widgets for each marker
 		const widgets: monaco.editor.IContentWidget[] = [];
@@ -407,25 +409,27 @@ export class ValidationManager {
 				// Add inline errors for any existing markers immediately
 				this.addInlineErrorsForExistingMarkers(editor, settings);
 				
-				// Dispose any previous listener for this model to avoid duplicates
+				// Dispose any previous listeners for this model to avoid duplicates
 				const existing = markerListeners.get(model);
 				if (existing) {
-					existing.dispose();
+					existing.marker.dispose();
+					existing.dispose.dispose();
 				}
 
 				// Listen for marker changes to update inline errors
-				const disposable = monaco.editor.onDidChangeMarkers((uris) => {
+				const markerDisposable = monaco.editor.onDidChangeMarkers((uris) => {
 					if (uris.some(uri => uri.toString() === model.uri.toString())) {
 						this.addInlineErrorsForExistingMarkers(editor, settings);
 					}
 				});
-				markerListeners.set(model, disposable);
-				
-				// Clean up listener when model is disposed
-				model.onWillDispose(() => {
-					disposable.dispose();
+
+				// Clean up both listeners when model is disposed
+				const disposeDisposable = model.onWillDispose(() => {
+					markerDisposable.dispose();
 					markerListeners.delete(model);
 				});
+
+				markerListeners.set(model, { marker: markerDisposable, dispose: disposeDisposable });
 			}
 			return;
 		}
