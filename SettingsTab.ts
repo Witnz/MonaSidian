@@ -1080,6 +1080,7 @@ export class MonacoPrettierSettingTab extends PluginSettingTab {
 								settings.languageAliases[newAlias.trim()] = canonical;
 							}
 							await this.plugin.saveSettings();
+							this.plugin.codeblockRenderer.rerenderAllMarkdownViews();
 						})
 				)
 				.addText((text) =>
@@ -1089,6 +1090,7 @@ export class MonacoPrettierSettingTab extends PluginSettingTab {
 						.onChange(async (newCanonical) => {
 							settings.languageAliases[alias] = newCanonical.trim();
 							await this.plugin.saveSettings();
+							this.plugin.codeblockRenderer.rerenderAllMarkdownViews();
 						})
 				)
 				.addButton((btn) =>
@@ -1098,6 +1100,7 @@ export class MonacoPrettierSettingTab extends PluginSettingTab {
 						.onClick(async () => {
 							delete settings.languageAliases[alias];
 							await this.plugin.saveSettings();
+							this.plugin.codeblockRenderer.rerenderAllMarkdownViews();
 							this.display();
 						})
 				);

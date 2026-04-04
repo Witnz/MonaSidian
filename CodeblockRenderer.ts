@@ -5,6 +5,7 @@ import type { MonacoPrettierSettings } from "./settings";
 import {
 	LANGUAGE_REGISTRY,
 	LANGUAGE_ALIASES,
+	HLJS_THEMES,
 	getEnabledLanguageSet,
 } from "./CodeblockLanguages";
 
@@ -48,8 +49,10 @@ export class CodeblockRenderer {
 		for (const name of enabled) {
 			const grammar = LANGUAGE_REGISTRY[name];
 			if (!grammar) continue;
-			// hljs.registerLanguage is idempotent for the same name — safe to call multiple times
-			hljs.registerLanguage(name, grammar);
+			// Avoid re-registering languages; some Highlight.js builds throw on duplicates.
+			if (!hljs.getLanguage(name)) {
+				hljs.registerLanguage(name, grammar);
+			}
 		}
 	}
 
@@ -68,25 +71,38 @@ export class CodeblockRenderer {
 		}
 
 		if (!this.settings.codeblockAllowThemeBackground) {
-			// Strip lines that set background or background-color to prevent
-			// hljs dark backgrounds from clashing with the Obsidian theme
-			css = css
-				.split("\n")
-				.filter((line) => !/background(?:-color)?\s*:/.test(line))
-				.join("\n");
+			// Strip only background declarations to prevent hljs dark backgrounds from clashing
+			// with the Obsidian theme without removing unrelated CSS (handles minified themes).
+			css = this.stripThemeBackgroundDeclarations(css);
 		}
 
 		this.injectThemeCss(css);
 	}
 
 	/**
+	 * Remove background/background-color declarations while preserving other
+	 * declarations on the same line (for example in minified themes).
+	 */
+	private stripThemeBackgroundDeclarations(css: string): string {
+		return css.replace(
+			/(^|[;{]\s*)background(?:-color)?\s*:\s*[^;{}]+;?/gim,
+			(_match: string, prefix: string) => prefix
+		);
+	}
+
+	/**
 	 * Read a theme CSS file from the vendored highlight/styles directory.
+	 * Theme name is validated against the HLJS_THEMES allowlist to prevent path traversal.
 	 */
 	private async loadThemeCss(themeName: string): Promise<string | null> {
+		// Validate against the allowlist before constructing the path
+		if (!HLJS_THEMES.includes(themeName)) {
+			console.warn(`MonaSidian: unknown theme "${themeName}", refusing to load`);
+			return null;
+		}
 		try {
-			// The plugin manifest dir gives us the path to the plugin folder
-			const pluginDir = (this.plugin.manifest as any).dir as string;
-			const cssPath = `${pluginDir}/highlight/styles/${themeName}.css`;
+			// Use plugin id to build a vault-relative path, avoiding raw manifest.dir
+			const cssPath = `.obsidian/plugins/${this.plugin.manifest.id}/highlight/styles/${themeName}.css`;
 			const css = await this.app.vault.adapter.read(cssPath);
 			return css;
 		} catch {

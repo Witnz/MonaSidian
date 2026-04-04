@@ -313,7 +313,7 @@ export class ValidationManager {
 		markersByLine.forEach((marker, lineNum) => {
 			const lineContent = model.getLineContent(lineNum);
 			const isError = marker.severity === monaco.MarkerSeverity.Error;
-			const widgetId = `monaco-inline-${lineNum}-${Date.now()}`;
+			const widgetId = `monaco-inline-${marker.startLineNumber}-${marker.startColumn}-${marker.endLineNumber}-${marker.endColumn}-${marker.severity}-${encodeURIComponent(marker.message)}`;
 
 			const widget: monaco.editor.IContentWidget = {
 				getId: () => widgetId,
@@ -494,7 +494,7 @@ export class ValidationManager {
 		errors.forEach((error, index) => {
 			const lineContent = model.getLineContent(error.line);
 			const isError = error.severity === "error";
-			const widgetId = `validation-inline-${index}-${Date.now()}`;
+			const widgetId = `validation-inline-${error.line}-${index}-${error.severity}-${encodeURIComponent(error.message)}`;
 			
 			const widget: monaco.editor.IContentWidget = {
 				getId: () => widgetId,
