@@ -1078,7 +1078,7 @@ export class MonacoPrettierSettingTab extends PluginSettingTab {
 			}, 400);
 		};
 
-		const addAliasRow = (alias: string, canonical: string, isPending: boolean) => {
+		const addAliasRow = (alias: string, canonical: string) => {
 			// currentKey is mutable so that both handlers always write to the live key,
 			// even after the alias field has been renamed mid-session.
 			let currentKey = alias;
@@ -1135,7 +1135,7 @@ export class MonacoPrettierSettingTab extends PluginSettingTab {
 		};
 
 		for (const [alias, canonical] of aliasEntries) {
-			addAliasRow(alias, canonical, false);
+			addAliasRow(alias, canonical);
 		}
 
 		// Add alias button — adds a UI-only row; nothing is written to settings until a non-empty key is typed.
@@ -1145,7 +1145,7 @@ export class MonacoPrettierSettingTab extends PluginSettingTab {
 					.setButtonText("Add alias")
 					.setCta()
 					.onClick(() => {
-						addAliasRow("", "", true);
+						addAliasRow("", "");
 					})
 			);
 	}

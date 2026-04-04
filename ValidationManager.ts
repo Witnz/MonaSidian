@@ -506,7 +506,7 @@ export class ValidationManager {
 		errors.forEach((error, index) => {
 			const lineContent = model.getLineContent(error.line);
 			const isError = error.severity === "error";
-			const widgetId = `validation-inline-${error.line}-${index}-${error.severity}-${encodeURIComponent(error.message)}`;
+			const widgetId = `validation-inline-${error.line}-${error.column}-${error.severity}-${djb2Hash(error.message)}`;
 			
 			const widget: monaco.editor.IContentWidget = {
 				getId: () => widgetId,

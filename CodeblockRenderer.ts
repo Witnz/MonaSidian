@@ -178,9 +178,9 @@ export class CodeblockRenderer {
 
 		// Extract language from class list (e.g. "language-javascript")
 		let originalLang: string | null = null;
-		const classList = Array.from(codeEl.classList);
-		for (const cls of classList) {
-			const match = cls.match(/^language-(.+)$/);
+		const { classList } = codeEl;
+		for (let ci = 0; ci < classList.length; ci++) {
+			const match = classList.item(ci)!.match(/^language-(.+)$/);
 			if (match) {
 				originalLang = match[1].toLowerCase();
 				break;
@@ -273,11 +273,14 @@ export class CodeblockRenderer {
 			...Object.keys(oldSettings.enabledLanguageGroups),
 		]);
 		let groupsChanged = false;
-		allGroupKeys.forEach((key) => {
+		const groupKeyArr = Array.from(allGroupKeys);
+		for (let ki = 0; ki < groupKeyArr.length; ki++) {
+			const key = groupKeyArr[ki];
 			if (!!newSettings.enabledLanguageGroups[key] !== !!oldSettings.enabledLanguageGroups[key]) {
 				groupsChanged = true;
+				break;
 			}
-		});
+		}
 
 		if (groupsChanged) {
 			// Determine groups newly disabled

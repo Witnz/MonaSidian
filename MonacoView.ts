@@ -302,7 +302,10 @@ export class MonacoPrettierView extends TextFileView {
 			event.preventDefault();
 			event.stopPropagation();
 			if (this.plugin.settings.formatOnSave) {
-				this.formatDocument().then(() => this.requestSave());
+				this.formatDocument().then(
+					() => this.requestSave(),
+					() => this.requestSave()
+				);
 			} else {
 				this.requestSave();
 			}
