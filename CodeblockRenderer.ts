@@ -21,6 +21,10 @@ const THEME_STYLE_ID = "monasidian-hljs-theme";
 export class CodeblockRenderer {
 	private app: App;
 	private plugin: MonacoPrettierPlugin;
+	/** Tracks the injected <style> element per Document (for pop-out windows). */
+	private themeStylesByDoc: WeakMap<Document, HTMLStyleElement> = new WeakMap();
+	/** The currently active (processed) theme CSS, cached for late-joining pop-out windows. */
+	private currentThemeCss: string | null = null;
 
 	constructor(app: App, plugin: MonacoPrettierPlugin) {
 		this.app = app;
@@ -76,6 +80,7 @@ export class CodeblockRenderer {
 			css = this.stripThemeBackgroundDeclarations(css);
 		}
 
+		this.currentThemeCss = css;
 		this.injectThemeCss(css);
 	}
 
@@ -111,24 +116,52 @@ export class CodeblockRenderer {
 	}
 
 	/**
-	 * Insert or replace the <style id="monasidian-hljs-theme"> element in document.head.
+	 * Insert or replace the <style id="monasidian-hljs-theme"> element in the
+	 * given document (or document.head for backwards compat). Called for every
+	 * document that owns a highlighted element so pop-out windows are styled too.
 	 */
-	private injectThemeCss(css: string): void {
-		let styleEl = document.head.querySelector(`#${THEME_STYLE_ID}`) as HTMLStyleElement | null;
+	private injectThemeCssIntoDoc(css: string, doc: Document): void {
+		let styleEl = this.themeStylesByDoc.get(doc);
 		if (!styleEl) {
-			styleEl = document.createElement("style");
+			styleEl = doc.createElement("style");
 			styleEl.id = THEME_STYLE_ID;
-			document.head.appendChild(styleEl);
+			doc.head.appendChild(styleEl);
+			this.themeStylesByDoc.set(doc, styleEl);
 		}
 		styleEl.textContent = css;
 	}
 
 	/**
+	 * Inject or update the theme CSS in every open document (main window + pop-outs).
+	 * Falls back to `document` when the workspace API is unavailable.
+	 */
+	private injectThemeCss(css: string): void {
+		// Collect all unique Documents currently open in the workspace
+		const docs = new Set<Document>();
+		docs.add(document);
+		if (this.app?.workspace) {
+			this.app.workspace.iterateAllLeaves((leaf) => {
+				const doc = (leaf.view?.containerEl?.ownerDocument) as Document | null;
+				if (doc) docs.add(doc);
+			});
+		}
+		docs.forEach((doc) => this.injectThemeCssIntoDoc(css, doc));
+	}
+
+	/**
 	 * Markdown post-processor: called by Obsidian for every rendered section.
 	 * Finds all `pre > code` blocks and applies hljs highlighting where applicable.
+	 * Also ensures the theme CSS is present in the element's owning document (pop-out
+	 * windows have a different Document than the main window).
 	 */
 	processCodeblock(el: HTMLElement, _ctx: MarkdownPostProcessorContext): void {
 		if (!this.settings.enablePrettyCodeblocks) return;
+
+		// Ensure this document has the theme CSS (handles pop-out windows)
+		const doc = el.ownerDocument;
+		if (doc && this.currentThemeCss && !this.themeStylesByDoc.has(doc)) {
+			this.injectThemeCssIntoDoc(this.currentThemeCss, doc);
+		}
 
 		const codeEls = el.querySelectorAll<HTMLElement>("pre > code");
 		for (let i = 0; i < codeEls.length; i++) {
@@ -234,10 +267,17 @@ export class CodeblockRenderer {
 			await this.applyTheme(newSettings.codeblockTheme);
 		}
 
-		// Language groups changed
-		const groupsChanged =
-			JSON.stringify(newSettings.enabledLanguageGroups) !==
-			JSON.stringify(oldSettings.enabledLanguageGroups);
+		// Language groups changed — compare key-by-key to avoid JSON.stringify key-order sensitivity
+		const allGroupKeys = new Set([
+			...Object.keys(newSettings.enabledLanguageGroups),
+			...Object.keys(oldSettings.enabledLanguageGroups),
+		]);
+		let groupsChanged = false;
+		allGroupKeys.forEach((key) => {
+			if (!!newSettings.enabledLanguageGroups[key] !== !!oldSettings.enabledLanguageGroups[key]) {
+				groupsChanged = true;
+			}
+		});
 
 		if (groupsChanged) {
 			// Determine groups newly disabled
@@ -274,9 +314,21 @@ export class CodeblockRenderer {
 	}
 
 	/**
-	 * Remove injected theme CSS. Called on plugin unload or when feature is disabled.
+	 * Remove injected theme CSS from all Documents. Called on plugin unload or when feature is disabled.
 	 */
 	cleanup(): void {
-		document.head.querySelector(`#${THEME_STYLE_ID}`)?.remove();
+		// Remove from every document that had CSS injected
+		const docs = new Set<Document>();
+		docs.add(document);
+		if (this.app?.workspace) {
+			this.app.workspace.iterateAllLeaves((leaf) => {
+				const doc = (leaf.view?.containerEl?.ownerDocument) as Document | null;
+				if (doc) docs.add(doc);
+			});
+		}
+		docs.forEach((doc) => {
+			this.themeStylesByDoc.get(doc)?.remove();
+		});
+		this.currentThemeCss = null;
 	}
 }

@@ -1067,7 +1067,8 @@ export class MonacoPrettierSettingTab extends PluginSettingTab {
 
 		// Render each existing alias as an editable row.
 		// A shared debounce timer batches rapid keystrokes into a single save+rerender.
-		const aliasEntries = Object.entries(settings.languageAliases);
+		// Filter out any stale empty-key entries that may exist in settings from older versions.
+		const aliasEntries = Object.entries(settings.languageAliases).filter(([k]) => k !== "");
 		let aliasDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 		const debounceSaveAndRerender = () => {
 			if (aliasDebounceTimer !== null) clearTimeout(aliasDebounceTimer);
@@ -1077,7 +1078,7 @@ export class MonacoPrettierSettingTab extends PluginSettingTab {
 			}, 400);
 		};
 
-		for (const [alias, canonical] of aliasEntries) {
+		const addAliasRow = (alias: string, canonical: string, isPending: boolean) => {
 			// currentKey is mutable so that both handlers always write to the live key,
 			// even after the alias field has been renamed mid-session.
 			let currentKey = alias;
@@ -1090,8 +1091,12 @@ export class MonacoPrettierSettingTab extends PluginSettingTab {
 						.onChange((newAlias) => {
 							const trimmed = newAlias.trim();
 							// Preserve the current canonical value (may have been edited already)
-							const currentValue = settings.languageAliases[currentKey] ?? canonical;
-							delete settings.languageAliases[currentKey];
+							const currentValue = currentKey
+								? (settings.languageAliases[currentKey] ?? canonical)
+								: canonical;
+							if (currentKey) {
+								delete settings.languageAliases[currentKey];
+							}
 							if (trimmed) {
 								settings.languageAliases[trimmed] = currentValue;
 							}
@@ -1107,8 +1112,8 @@ export class MonacoPrettierSettingTab extends PluginSettingTab {
 						.onChange((newCanonical) => {
 							if (currentKey) {
 								settings.languageAliases[currentKey] = newCanonical.trim();
+								debounceSaveAndRerender();
 							}
-							debounceSaveAndRerender();
 						})
 				)
 				.addButton((btn) =>
@@ -1117,25 +1122,30 @@ export class MonacoPrettierSettingTab extends PluginSettingTab {
 						.setTooltip("Remove alias")
 						.onClick(async () => {
 							if (aliasDebounceTimer !== null) clearTimeout(aliasDebounceTimer);
-							delete settings.languageAliases[currentKey];
-							await this.plugin.saveSettings();
-							this.plugin.codeblockRenderer.rerenderAllMarkdownViews();
+							if (currentKey) {
+								delete settings.languageAliases[currentKey];
+								await this.plugin.saveSettings();
+								this.plugin.codeblockRenderer.rerenderAllMarkdownViews();
+							}
 							this.display();
 						})
 				);
 			row.nameEl.setText("→");
+			return row;
+		};
+
+		for (const [alias, canonical] of aliasEntries) {
+			addAliasRow(alias, canonical, false);
 		}
 
-		// Add alias button
+		// Add alias button — adds a UI-only row; nothing is written to settings until a non-empty key is typed.
 		new Setting(containerEl)
 			.addButton((btn) =>
 				btn
 					.setButtonText("Add alias")
 					.setCta()
-					.onClick(async () => {
-						settings.languageAliases[""] = "";
-						await this.plugin.saveSettings();
-						this.display();
+					.onClick(() => {
+						addAliasRow("", "", true);
 					})
 			);
 	}

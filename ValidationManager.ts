@@ -3,6 +3,18 @@ import { TreeSitterManager } from "./TreeSitterManager";
 import type { MonacoPrettierSettings } from "./settings";
 
 /**
+ * Simple djb2 hash for short, stable string fingerprints.
+ * Used to keep content-widget IDs compact while still distinguishing messages.
+ */
+function djb2Hash(str: string): number {
+	let hash = 5381;
+	for (let i = 0; i < str.length; i++) {
+		hash = ((hash << 5) + hash) ^ str.charCodeAt(i);
+	}
+	return hash >>> 0; // unsigned 32-bit
+}
+
+/**
  * Store for inline error decorations per editor
  */
 const inlineErrorDecorations = new WeakMap<monaco.editor.IStandaloneCodeEditor, monaco.editor.IContentWidget[]>();
@@ -313,7 +325,7 @@ export class ValidationManager {
 		markersByLine.forEach((marker, lineNum) => {
 			const lineContent = model.getLineContent(lineNum);
 			const isError = marker.severity === monaco.MarkerSeverity.Error;
-			const widgetId = `monaco-inline-${marker.startLineNumber}-${marker.startColumn}-${marker.endLineNumber}-${marker.endColumn}-${marker.severity}-${encodeURIComponent(marker.message)}`;
+			const widgetId = `monaco-inline-${marker.startLineNumber}-${marker.startColumn}-${marker.severity}-${djb2Hash(marker.message)}`;
 
 			const widget: monaco.editor.IContentWidget = {
 				getId: () => widgetId,
