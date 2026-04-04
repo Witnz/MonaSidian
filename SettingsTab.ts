@@ -3,8 +3,9 @@ import MonacoPrettierPlugin from "./main";
 import { BUILT_IN_THEMES, THEME_PRESETS } from "./ThemeManager";
 import type { TreeSitterLanguageParser } from "./settings";
 import { DEFAULT_SETTINGS } from "./settings";
+import { LANGUAGE_GROUPS, HLJS_THEMES } from "./CodeblockLanguages";
 
-type SettingsTabType = 'general' | 'editor' | 'formatting' | 'theme';
+type SettingsTabType = 'general' | 'editor' | 'formatting' | 'theme' | 'codeblocks';
 
 export class MonacoPrettierSettingTab extends PluginSettingTab {
 	plugin: MonacoPrettierPlugin;
@@ -28,7 +29,8 @@ export class MonacoPrettierSettingTab extends PluginSettingTab {
 			{ id: 'general', label: 'General' },
 			{ id: 'editor', label: 'Editor' },
 			{ id: 'formatting', label: 'Formatting' },
-			{ id: 'theme', label: 'Theme' }
+			{ id: 'theme', label: 'Theme' },
+			{ id: 'codeblocks', label: 'Codeblocks' }
 		];
 
 		tabs.forEach(tab => {
@@ -58,6 +60,9 @@ export class MonacoPrettierSettingTab extends PluginSettingTab {
 				break;
 			case 'theme':
 				this.displayThemeSettings(contentEl);
+				break;
+			case 'codeblocks':
+				this.displayCodeblocksSettings(contentEl);
 				break;
 		}
 	}
@@ -958,6 +963,191 @@ export class MonacoPrettierSettingTab extends PluginSettingTab {
 		}
 		
 		new Notice(`✓ Removed ${removeCount} parsers`);
+	}
+
+	private displayCodeblocksSettings(containerEl: HTMLElement): void {
+		// Section 1 — Master Toggle
+		containerEl.createEl("h3", { text: "Pretty Code Blocks" });
+
+		const settings = this.plugin.settings;
+
+		new Setting(containerEl)
+			.setName("Enable MonaSidian code blocks")
+			.setDesc(
+				"Replace Obsidian's native code block renderer with Highlight.js for reading mode. " +
+				"Monaco editor is still used when editing code blocks."
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(settings.enablePrettyCodeblocks)
+					.onChange(async (value) => {
+						const oldSettings = { ...settings };
+						settings.enablePrettyCodeblocks = value;
+						await this.plugin.saveSettings();
+						await this.plugin.codeblockRenderer.onSettingsChanged(settings, oldSettings);
+						// Re-render this tab so the rest of the settings appear/disappear
+						this.display();
+					})
+			);
+
+		// If the feature is disabled, do not render further options
+		if (!settings.enablePrettyCodeblocks) return;
+
+		// Section 2 — Appearance
+		containerEl.createEl("h3", { text: "Appearance" });
+
+		new Setting(containerEl)
+			.setName("Syntax theme")
+			.setDesc("Highlight.js theme for code block syntax highlighting")
+			.addDropdown((dropdown) => {
+				for (const theme of HLJS_THEMES) {
+					dropdown.addOption(theme, theme);
+				}
+				dropdown.setValue(settings.codeblockTheme);
+				dropdown.onChange(async (value) => {
+					const oldSettings = { ...settings };
+					settings.codeblockTheme = value;
+					await this.plugin.saveSettings();
+					await this.plugin.codeblockRenderer.onSettingsChanged(settings, oldSettings);
+				});
+			});
+
+		new Setting(containerEl)
+			.setName("Allow theme background color")
+			.setDesc(
+				"Use the syntax theme's background color in code blocks. " +
+				"Disable if it conflicts with your Obsidian theme."
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(settings.codeblockAllowThemeBackground)
+					.onChange(async (value) => {
+						const oldSettings = { ...settings };
+						settings.codeblockAllowThemeBackground = value;
+						await this.plugin.saveSettings();
+						await this.plugin.codeblockRenderer.onSettingsChanged(settings, oldSettings);
+					})
+			);
+
+		// Section 3 — Language Groups
+		containerEl.createEl("h3", { text: "Active Language Groups" });
+		containerEl.createEl("p", {
+			text: "Select which language groups to enable for syntax highlighting. " +
+				"Languages in disabled groups fall back to Obsidian's native renderer.",
+			cls: "setting-item-description",
+		});
+
+		for (const [group, members] of Object.entries(LANGUAGE_GROUPS)) {
+			const preview = members.slice(0, 8).join(", ") + (members.length > 8 ? ", …" : "");
+			new Setting(containerEl)
+				.setName(`${group}`)
+				.setDesc(preview)
+				.addToggle((toggle) =>
+					toggle
+						.setValue(settings.enabledLanguageGroups[group] ?? false)
+						.onChange(async (value) => {
+							const oldSettings = {
+								...settings,
+								enabledLanguageGroups: { ...settings.enabledLanguageGroups },
+							};
+							settings.enabledLanguageGroups[group] = value;
+							await this.plugin.saveSettings();
+							await this.plugin.codeblockRenderer.onSettingsChanged(settings, oldSettings);
+						})
+				);
+		}
+
+		// Section 4 — Language Aliases
+		containerEl.createEl("h3", { text: "Language Aliases" });
+		containerEl.createEl("p", {
+			text: "Map non-standard fence language names to Highlight.js language names. " +
+				"Built-in aliases (golang→go, pwsh→powershell, etc.) are always active.",
+			cls: "setting-item-description",
+		});
+
+		// Render each existing alias as an editable row.
+		// A shared debounce timer batches rapid keystrokes into a single save+rerender.
+		// Filter out any stale empty-key entries that may exist in settings from older versions.
+		const aliasEntries = Object.entries(settings.languageAliases).filter(([k]) => k !== "");
+		let aliasDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+		const debounceSaveAndRerender = () => {
+			if (aliasDebounceTimer !== null) clearTimeout(aliasDebounceTimer);
+			aliasDebounceTimer = setTimeout(async () => {
+				await this.plugin.saveSettings();
+				this.plugin.codeblockRenderer.rerenderAllMarkdownViews();
+			}, 400);
+		};
+
+		const addAliasRow = (alias: string, canonical: string) => {
+			// currentKey is mutable so that both handlers always write to the live key,
+			// even after the alias field has been renamed mid-session.
+			let currentKey = alias;
+
+			const row = new Setting(containerEl)
+				.addText((text) =>
+					text
+						.setPlaceholder("alias")
+						.setValue(alias)
+						.onChange((newAlias) => {
+							const trimmed = newAlias.trim();
+							// Preserve the current canonical value (may have been edited already)
+							const currentValue = currentKey
+								? (settings.languageAliases[currentKey] ?? canonical)
+								: canonical;
+							if (currentKey) {
+								delete settings.languageAliases[currentKey];
+							}
+							if (trimmed) {
+								settings.languageAliases[trimmed] = currentValue;
+							}
+							// Update the shared key so the canonical handler targets the right entry
+							currentKey = trimmed;
+							debounceSaveAndRerender();
+						})
+				)
+				.addText((text) =>
+					text
+						.setPlaceholder("language name")
+						.setValue(canonical)
+						.onChange((newCanonical) => {
+							if (currentKey) {
+								settings.languageAliases[currentKey] = newCanonical.trim();
+								debounceSaveAndRerender();
+							}
+						})
+				)
+				.addButton((btn) =>
+					btn
+						.setIcon("trash")
+						.setTooltip("Remove alias")
+						.onClick(async () => {
+							if (aliasDebounceTimer !== null) clearTimeout(aliasDebounceTimer);
+							if (currentKey) {
+								delete settings.languageAliases[currentKey];
+								await this.plugin.saveSettings();
+								this.plugin.codeblockRenderer.rerenderAllMarkdownViews();
+							}
+							this.display();
+						})
+				);
+			row.nameEl.setText("→");
+			return row;
+		};
+
+		for (const [alias, canonical] of aliasEntries) {
+			addAliasRow(alias, canonical);
+		}
+
+		// Add alias button — adds a UI-only row; nothing is written to settings until a non-empty key is typed.
+		new Setting(containerEl)
+			.addButton((btn) =>
+				btn
+					.setButtonText("Add alias")
+					.setCta()
+					.onClick(() => {
+						addAliasRow("", "");
+					})
+			);
 	}
 }
 

@@ -3,9 +3,27 @@ import { TreeSitterManager } from "./TreeSitterManager";
 import type { MonacoPrettierSettings } from "./settings";
 
 /**
+ * Simple djb2 hash for short, stable string fingerprints.
+ * Used to keep content-widget IDs compact while still distinguishing messages.
+ */
+function djb2Hash(str: string): number {
+	let hash = 5381;
+	for (let i = 0; i < str.length; i++) {
+		hash = ((hash << 5) + hash) ^ str.charCodeAt(i);
+	}
+	return hash >>> 0; // unsigned 32-bit
+}
+
+/**
  * Store for inline error decorations per editor
  */
-const inlineErrorDecorations = new WeakMap<monaco.editor.IStandaloneCodeEditor, string[]>();
+const inlineErrorDecorations = new WeakMap<monaco.editor.IStandaloneCodeEditor, monaco.editor.IContentWidget[]>();
+
+/**
+ * Store for marker change listener disposables per model, to avoid leaks.
+ * Stores both the global marker listener and the model's onWillDispose subscription.
+ */
+const markerListeners = new WeakMap<monaco.editor.ITextModel, { marker: monaco.IDisposable; dispose: monaco.IDisposable }>();
 
 /**
  * Lightweight syntax validation for non-TypeScript/JavaScript languages
@@ -176,13 +194,13 @@ export class ValidationManager {
 				});
 			}
 			
-			// Check for invalid indentation
-			const indent = line.search(/\S/);
-			if (indent > 0 && indent % 4 !== 0) {
+			// Check for mixed indentation (tabs and spaces on the same line)
+			const indentMatch = line.match(/^(\s+)/);
+			if (indentMatch && indentMatch[1].includes('\t') && indentMatch[1].includes(' ')) {
 				errors.push({
 					line: lineNum,
 					column: 1,
-					message: "Indentation should be a multiple of 4 spaces",
+					message: "Mixed tabs and spaces in indentation (Python requires consistent indentation)",
 					severity: "warning"
 				});
 			}
@@ -282,24 +300,17 @@ export class ValidationManager {
 		// Get all markers for this model
 		const markers = monaco.editor.getModelMarkers({ resource: model.uri });
 		
+		// Always clear previously-added widgets first so they're removed when errors are fixed
+		const oldWidgets = inlineErrorDecorations.get(editor) || [];
+		oldWidgets.forEach(widget => editor.removeContentWidget(widget));
+		inlineErrorDecorations.set(editor, []);
+
 		if (markers.length === 0) {
-			console.log('No markers found for inline errors');
 			return;
 		}
 
-		console.log(`Found ${markers.length} markers, adding inline errors`);
-
-		// Clear previous content widgets
-		const oldWidgets = inlineErrorDecorations.get(editor) || [];
-		oldWidgets.forEach(widgetId => {
-			const widget = (editor as any)._contentWidgets?.[widgetId];
-			if (widget) {
-				editor.removeContentWidget(widget);
-			}
-		});
-
 		// Create new content widgets for each marker
-		const widgetIds: string[] = [];
+		const widgets: monaco.editor.IContentWidget[] = [];
 		const inlineFont = settings?.inlineErrorFont || "'Cascadia Code', 'Fira Code', Consolas, monospace";
 		const inlineFontSize = settings?.inlineErrorFontSize || 12;
 
@@ -314,9 +325,9 @@ export class ValidationManager {
 		markersByLine.forEach((marker, lineNum) => {
 			const lineContent = model.getLineContent(lineNum);
 			const isError = marker.severity === monaco.MarkerSeverity.Error;
-			const widgetId = `monaco-inline-${lineNum}-${Date.now()}`;
+			const widgetId = `monaco-inline-${marker.startLineNumber}-${marker.startColumn}-${marker.severity}-${djb2Hash(marker.message)}`;
 
-			const widget = {
+			const widget: monaco.editor.IContentWidget = {
 				getId: () => widgetId,
 				getDomNode: () => {
 					const node = document.createElement('span');
@@ -343,11 +354,10 @@ export class ValidationManager {
 			};
 
 			editor.addContentWidget(widget);
-			widgetIds.push(widgetId);
+			widgets.push(widget);
 		});
 
-		inlineErrorDecorations.set(editor, widgetIds);
-		console.log(`Created ${widgetIds.length} inline content widgets from Monaco markers`);
+		inlineErrorDecorations.set(editor, widgets);
 	}
 
 	/**
@@ -360,13 +370,6 @@ export class ValidationManager {
 		settings?: MonacoPrettierSettings
 	): Promise<void> {
 		const enableTreeSitter = settings?.enableTreeSitter || false;
-		
-		console.log('ValidationManager.validateAndDisplayMarkers called:', {
-			language,
-			codeLength: code.length,
-			enableTreeSitter,
-			firstLine: code.split('\n')[0]
-		});
 
 		// Pass settings to TreeSitterManager if available
 		if (settings?.treeSitterParsers) {
@@ -384,7 +387,6 @@ export class ValidationManager {
 			];
 			
 			if (treeSitterLanguages.includes(language)) {
-				console.log('Attempting tree-sitter validation for', language);
 				try {
 					await TreeSitterManager.validateAndDisplayMarkers(
 						editor, 
@@ -393,14 +395,12 @@ export class ValidationManager {
 						settings?.inlineErrorFont,
 						settings?.inlineErrorFontSize
 					);
-					console.log('Tree-sitter validation completed for', language);
 					return; // Tree-sitter handled it
 				} catch (error) {
 					console.warn('Tree-sitter validation failed for', language, ':', error);
-					// For languages that ONLY have tree-sitter support, show error message
+					// For languages that ONLY have tree-sitter support, bail out
 					const treeSitterOnlyLanguages = ['go', 'rust', 'java', 'cpp', 'c', 'sh', 'bash', 'shell', 'zsh'];
 					if (treeSitterOnlyLanguages.includes(language)) {
-						console.error(`No fallback validator for ${language}. Enable tree-sitter and install parser.`);
 						return;
 					}
 					// Fall through to other validators for languages with Monaco/lightweight fallback
@@ -408,40 +408,46 @@ export class ValidationManager {
 			}
 		}
 		
-		// For JavaScript/TypeScript/JSON/CSS/HTML, Monaco has built-in validation as fallback
-		// We need to read the markers and add inline error messages
+		// For JavaScript/TypeScript/JSON/CSS/HTML, Monaco has built-in validation.
+		// Set up a listener to add inline error widgets when markers change.
 		const monacoValidatedLanguages = [
 			'javascript', 'typescript', 'javascriptreact', 'typescriptreact',
 			'json', 'css', 'scss', 'less', 'html'
 		];
 		
 		if (monacoValidatedLanguages.includes(language)) {
-			console.log('Using Monaco built-in validation for', language);
-			// Set up listener for Monaco's markers and add inline errors immediately
 			const model = editor.getModel();
 			if (model) {
-				// Add inline errors for any existing markers
+				// Add inline errors for any existing markers immediately
 				this.addInlineErrorsForExistingMarkers(editor, settings);
 				
+				// Dispose any previous listeners for this model to avoid duplicates
+				const existing = markerListeners.get(model);
+				if (existing) {
+					existing.marker.dispose();
+					existing.dispose.dispose();
+				}
+
 				// Listen for marker changes to update inline errors
-				const disposable = monaco.editor.onDidChangeMarkers((uris) => {
+				const markerDisposable = monaco.editor.onDidChangeMarkers((uris) => {
 					if (uris.some(uri => uri.toString() === model.uri.toString())) {
 						this.addInlineErrorsForExistingMarkers(editor, settings);
 					}
 				});
-				
-				// Clean up listener when model changes
-				model.onWillDispose(() => {
-					disposable.dispose();
+
+				// Clean up both listeners when model is disposed
+				const disposeDisposable = model.onWillDispose(() => {
+					markerDisposable.dispose();
+					markerListeners.delete(model);
 				});
+
+				markerListeners.set(model, { marker: markerDisposable, dispose: disposeDisposable });
 			}
 			return;
 		}
 		
-		// Use lightweight validators as fallback or for unsupported languages
+		// Use lightweight validators for other languages
 		let errors: ValidationError[] = [];
-		
-		console.log('Using lightweight validator for', language);
 		
 		switch (language) {
 			case 'json':
@@ -459,17 +465,10 @@ export class ValidationManager {
 			case 'less':
 				errors = this.validateCSS(code);
 				break;
-			case 'sql':
-				// SQL validation not currently supported
-				console.log('SQL validation not supported. Consider enabling tree-sitter if a parser becomes available.');
-				return;
 			default:
 				// No validation for other languages
-				console.log('No validator available for language:', language);
 				return;
 		}
-		
-		console.log('Validation found', errors.length, 'errors for', language);
 		
 		// Convert errors to Monaco markers
 		const model = editor.getModel();
@@ -479,12 +478,9 @@ export class ValidationManager {
 		const inlineFontSize = settings?.inlineErrorFontSize || 12;
 		
 		const markers: monaco.editor.IMarkerData[] = errors.map(error => {
-			// Get the line content to calculate better error span
 			const lineContent = model.getLineContent(error.line);
 			const lineLength = lineContent.length;
-			
-			// Calculate end column - underline rest of line or at least 5 characters
-			let endColumn = Math.max(error.column + 5, lineLength + 1);
+			const endColumn = Math.max(error.column + 5, lineLength + 1);
 			
 			return {
 				severity: error.severity === "error" 
@@ -499,28 +495,20 @@ export class ValidationManager {
 			};
 		});
 		
-		console.log('Setting', markers.length, 'markers for', language, ':', markers);
-		
 		monaco.editor.setModelMarkers(model, 'syntax-validator', markers);
 		
-		// Add inline error messages using content widgets (Monaco 0.45.0 doesn't support `after.content`)
-		// First, clear previous content widgets
+		// Clear previous content widgets
 		const oldWidgets = inlineErrorDecorations.get(editor) || [];
-		oldWidgets.forEach(widgetId => {
-			const widget = (editor as any)._contentWidgets?.[widgetId];
-			if (widget) {
-				editor.removeContentWidget(widget);
-			}
-		});
+		oldWidgets.forEach(widget => editor.removeContentWidget(widget));
 		
 		// Create new content widgets for each error
-		const widgetIds: string[] = [];
+		const widgets: monaco.editor.IContentWidget[] = [];
 		errors.forEach((error, index) => {
 			const lineContent = model.getLineContent(error.line);
 			const isError = error.severity === "error";
-			const widgetId = `validation-inline-${index}-${Date.now()}`;
+			const widgetId = `validation-inline-${error.line}-${error.column}-${error.severity}-${djb2Hash(error.message)}`;
 			
-			const widget = {
+			const widget: monaco.editor.IContentWidget = {
 				getId: () => widgetId,
 				getDomNode: () => {
 					const node = document.createElement('span');
@@ -547,12 +535,10 @@ export class ValidationManager {
 			};
 			
 			editor.addContentWidget(widget);
-			widgetIds.push(widgetId);
+			widgets.push(widget);
 		});
 		
-		inlineErrorDecorations.set(editor, widgetIds);
-		
-		console.log(`Created ${widgetIds.length} inline content widgets`);
+		inlineErrorDecorations.set(editor, widgets);
 	}
 
 	/**
@@ -566,12 +552,7 @@ export class ValidationManager {
 		
 		// Clear inline error content widgets
 		const oldWidgets = inlineErrorDecorations.get(editor) || [];
-		oldWidgets.forEach(widgetId => {
-			const widget = (editor as any)._contentWidgets?.[widgetId];
-			if (widget) {
-				editor.removeContentWidget(widget);
-			}
-		});
+		oldWidgets.forEach(widget => editor.removeContentWidget(widget));
 		inlineErrorDecorations.set(editor, []);
 	}
 }
