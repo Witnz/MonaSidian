@@ -2,15 +2,13 @@
 
 [![install size](https://packagephobia.now.sh/badge?p=highlight.js)](https://packagephobia.now.sh/result?p=highlight.js)
 
-**This package contains only the CDN build assets of highlight.js.**
+**This package contains only the prebuilt Highlight.js assets required by this plugin, not the full upstream CDN release set.**
 
-This may be what you want if you'd like to install the pre-built distributable highlight.js client-side assets via NPM. If you're wanting to use highlight.js mainly on the server-side you likely want the [highlight.js][1] package instead.
+It is intended for plugin use cases that need a small, curated subset of client-side Highlight.js assets. If you're wanting to use highlight.js mainly on the server-side you likely want the [highlight.js][1] package instead.
 
-To access these files via CDN:<br>
-https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@latest/build/
+Only include the language grammars and theme CSS files that are actually supported by the renderer, and add new assets selectively rather than vendoring the complete CDN distribution.
 
-**If you just want a single .js file with the common languages built-in:
-<https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@latest/build/highlight.min.js>**
+**If you need additional languages or themes, generate or copy only the specific assets required by your supported configuration instead of mirroring the full CDN build.**
 
 ---
 
